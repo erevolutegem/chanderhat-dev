@@ -1,0 +1,5 @@
+[build]
+installCanvas = true
+
+[variables]
+NODE_VERSION = "22.12.0"
