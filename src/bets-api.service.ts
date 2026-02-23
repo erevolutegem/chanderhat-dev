@@ -18,15 +18,15 @@ export class BetsApiService {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
         const redisClient = this.redisService.getClient();
 
-        // Comprehensive list of possible BetsAPI endpoints
+        // Prioritize more universal endpoints first (events/inplay usually more open than bet365/inplay)
         const endpoints = [
-            'https://api.betsapi.com/v1/bet365/inplay',
-            'https://api.b365api.com/v1/bet365/inplay',
             'https://api.betsapi.com/v1/events/inplay',
-            'https://api.b365api.com/v1/events/inplay'
+            'https://api.b365api.com/v1/events/inplay',
+            'https://api.betsapi.com/v1/bet365/inplay',
+            'https://api.b365api.com/v1/bet365/inplay'
         ];
 
-        this.logger.log(`Fetching live matches v7.1. SportID: ${sportId || 'ALL'}. Token: ${apiKey?.substring(0, 5)}...`);
+        this.logger.log(`Fetching matches v7.3. SportID: ${sportId || 'ALL'}. Token: ${apiKey?.substring(0, 5)}...`);
 
         const cacheKey = sportId ? `betsapi:live_games:${sportId}` : `betsapi:live_games:all`;
         try {
@@ -35,13 +35,13 @@ export class BetsApiService {
         } catch (err) { }
 
         let allResults: any[] = [];
-        let debugInfo: string[] = [];
+        let debugSet = new Set<string>();
 
         try {
             const mainSports = sportId ? [sportId] : [1, 3, 13, 18, 12, 4, 16];
 
             for (const endpoint of endpoints) {
-                this.logger.log(`Testing endpoint: ${endpoint}`);
+                this.logger.log(`Trying ${endpoint}...`);
                 let hasData = false;
 
                 const resultsForEndpoint = await Promise.all(mainSports.map(async (sId) => {
@@ -52,9 +52,8 @@ export class BetsApiService {
                             })
                         );
 
-                        // Capture API-specific error messages for diagnostics
                         if (resp.data && resp.data.success === 0) {
-                            debugInfo.push(`${endpoint} error: ${resp.data.error || 'Unknown'}`);
+                            debugSet.add(`${endpoint.replace('https://api.', '')} -> ${resp.data.error || 'Err'}`);
                         }
 
                         if (resp.data && resp.data.success === 1 && resp.data.results && resp.data.results.length > 0) {
@@ -62,29 +61,25 @@ export class BetsApiService {
                             return resp.data.results;
                         }
                     } catch (e) {
-                        debugInfo.push(`${endpoint} fetch failed: ${e.message}`);
+                        debugSet.add(`${endpoint.replace('https://api.', '')} -> ${e.message}`);
                     }
                     return [];
                 }));
 
                 if (hasData) {
                     allResults = resultsForEndpoint.flat();
-                    this.logger.log(`SUCCESS: Found ${allResults.length} matches via ${endpoint}`);
+                    this.logger.log(`Got ${allResults.length} matches from ${endpoint}`);
                     break;
                 }
             }
 
-            // Enrich each match with simple odds if available
             const enrichedResults = allResults.map(item => {
                 let odds = null;
                 const markets = item.main?.sp || item.odds || {};
                 const targetMarket = markets.full_time_result || markets.match_winner || markets.to_win_the_match || markets.h2h;
 
                 if (targetMarket && Array.isArray(targetMarket.odds)) {
-                    odds = targetMarket.odds.map(o => ({
-                        name: o.header || o.name,
-                        value: o.odds
-                    }));
+                    odds = targetMarket.odds.map(o => ({ name: o.header || o.name, value: o.odds }));
                 }
 
                 return { ...item, odds: odds };
@@ -95,7 +90,7 @@ export class BetsApiService {
                 results: enrichedResults,
                 timestamp: new Date().toISOString(),
                 count: enrichedResults.length,
-                debug: enrichedResults.length === 0 ? debugInfo.slice(0, 3) : undefined
+                debug: enrichedResults.length === 0 ? Array.from(debugSet) : undefined
             };
 
             if (enrichedResults.length > 0) {
@@ -105,8 +100,8 @@ export class BetsApiService {
             return finalResponse;
 
         } catch (err) {
-            this.logger.error(`Fatal in getLiveGames: ${err.message}`);
-            return { success: false, results: [], error: err.message, debug: debugInfo };
+            this.logger.error(`Fatal: ${err.message}`);
+            return { success: false, results: [], error: err.message, debug: Array.from(debugSet) };
         }
     }
 }
