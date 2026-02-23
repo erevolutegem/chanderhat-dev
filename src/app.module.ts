@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { HttpModule } from '@nestjs/axios';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { EventsGateway } from './events.gateway';
 import { RedisService } from './redis.service';
+import { BetsApiService } from './bets-api.service';
+import { GamesController } from './games.controller';
 
 @Module({
   imports: [
@@ -12,6 +15,7 @@ import { RedisService } from './redis.service';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    HttpModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -23,7 +27,7 @@ import { RedisService } from './redis.service';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AppController],
-  providers: [AppService, EventsGateway, RedisService],
+  controllers: [AppController, GamesController],
+  providers: [AppService, EventsGateway, RedisService, BetsApiService],
 })
 export class AppModule { }
