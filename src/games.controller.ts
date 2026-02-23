@@ -6,8 +6,8 @@ export class GamesController {
     constructor(private readonly betsApiService: BetsApiService) { }
 
     @Get('live')
-    async getLiveGames(@Query('sportId') sportId: string) {
-        const id = sportId ? parseInt(sportId, 10) : 1;
+    async getLiveGames(@Query('sportId') sportId?: string) {
+        const id = sportId ? parseInt(sportId, 10) : undefined;
         return this.betsApiService.getLiveGames(id);
     }
 }
