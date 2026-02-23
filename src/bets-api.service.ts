@@ -36,8 +36,21 @@ export class BetsApiService {
 
         let allResults: any[] = [];
         let debugSet = new Set<string>();
+        let tokenStatus = "Unknown";
 
         try {
+            // DIAGNOSTIC: Check basic token validity with a non-inplay endpoint
+            try {
+                const check = await firstValueFrom(this.httpService.get('https://api.betsapi.com/v1/sport/list', { params: { token: apiKey } }));
+                if (check.data && check.data.success === 1) {
+                    tokenStatus = "Token VALID (Basic endpoints OK)";
+                } else {
+                    tokenStatus = `Token REJECTED (API says: ${check.data?.error || 'Invalid Token'})`;
+                }
+            } catch (e) {
+                tokenStatus = `Token INVALID/Exp or Conn Error (${e.message})`;
+            }
+
             const mainSports = sportId ? [sportId] : [1, 3, 13, 18, 12, 4, 16];
 
             for (const endpoint of endpoints) {
@@ -53,7 +66,7 @@ export class BetsApiService {
                         );
 
                         if (resp.data && resp.data.success === 0) {
-                            debugSet.add(`${endpoint.replace('https://api.', '')} -> ${resp.data.error || 'Err'}`);
+                            debugSet.add(`${endpoint.split('/')[4]} -> ${resp.data.error || '403 Forbidden'}`);
                         }
 
                         if (resp.data && resp.data.success === 1 && resp.data.results && resp.data.results.length > 0) {
@@ -61,7 +74,7 @@ export class BetsApiService {
                             return resp.data.results;
                         }
                     } catch (e) {
-                        debugSet.add(`${endpoint.replace('https://api.', '')} -> ${e.message}`);
+                        debugSet.add(`${endpoint.split('/')[4]} -> Fail: ${e.message}`);
                     }
                     return [];
                 }));
@@ -85,12 +98,20 @@ export class BetsApiService {
                 return { ...item, odds: odds };
             });
 
+            // Detection: If token is valid but ALL inplay endpoints failed, it's a Plan Restriction
+            let finalDebug = Array.from(debugSet);
+            if (tokenStatus.includes("VALID") && enrichedResults.length === 0 && finalDebug.length > 0) {
+                finalDebug.unshift("PLAN RESTRICTION: Your BetsAPI plan does NOT include In-Play data access. Please check your subscription.");
+            } else {
+                finalDebug.unshift(`Account: ${tokenStatus}`);
+            }
+
             const finalResponse = {
                 success: enrichedResults.length > 0,
                 results: enrichedResults,
                 timestamp: new Date().toISOString(),
                 count: enrichedResults.length,
-                debug: enrichedResults.length === 0 ? Array.from(debugSet) : undefined
+                debug: enrichedResults.length === 0 ? finalDebug : undefined
             };
 
             if (enrichedResults.length > 0) {
@@ -101,7 +122,7 @@ export class BetsApiService {
 
         } catch (err) {
             this.logger.error(`Fatal: ${err.message}`);
-            return { success: false, results: [], error: err.message, debug: Array.from(debugSet) };
+            return { success: false, results: [], error: err.message, debug: [tokenStatus, ...Array.from(debugSet)] };
         }
     }
 }
