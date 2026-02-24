@@ -17,6 +17,13 @@ const events_gateway_1 = require("./events.gateway");
 const redis_service_1 = require("./redis.service");
 const bets_api_service_1 = require("./bets-api.service");
 const games_controller_1 = require("./games.controller");
+const prisma_service_1 = require("./prisma.service");
+const site_service_1 = require("./site.service");
+const site_controller_1 = require("./site.controller");
+const owner_service_1 = require("./owner.service");
+const owner_controller_1 = require("./owner.controller");
+const currency_service_1 = require("./currency.service");
+const owner_controller_2 = require("./owner.controller");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -39,8 +46,8 @@ exports.AppModule = AppModule = __decorate([
                 inject: [config_1.ConfigService],
             }),
         ],
-        controllers: [app_controller_1.AppController, games_controller_1.GamesController],
-        providers: [app_service_1.AppService, events_gateway_1.EventsGateway, redis_service_1.RedisService, bets_api_service_1.BetsApiService],
+        controllers: [app_controller_1.AppController, games_controller_1.GamesController, site_controller_1.SiteController, owner_controller_1.OwnerController, owner_controller_2.CurrencyController],
+        providers: [app_service_1.AppService, events_gateway_1.EventsGateway, redis_service_1.RedisService, bets_api_service_1.BetsApiService, prisma_service_1.PrismaService, site_service_1.SiteService, owner_service_1.OwnerService, currency_service_1.CurrencyService],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

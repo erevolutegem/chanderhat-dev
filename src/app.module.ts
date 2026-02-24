@@ -15,7 +15,7 @@ import { SiteController } from './site.controller';
 import { OwnerService } from './owner.service';
 import { OwnerController } from './owner.controller';
 import { CurrencyService } from './currency.service';
-import { CurrencyController } from './currency.controller';
+import { CurrencyController } from './owner.controller';
 
 @Module({
   imports: [

@@ -53,7 +53,7 @@ export class SiteService {
             } as any;
         }
 
-        if (site.isActive) {
+        if (site && site.isActive) {
             await redisClient.set(cacheKey, JSON.stringify(site), 'EX', 60).catch(() => { });
         }
 
