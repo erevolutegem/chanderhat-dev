@@ -19,8 +19,8 @@ export declare class OwnerController {
             createdAt: Date;
             updatedAt: Date;
             siteId: number;
-            currencyId: number;
             isDefault: boolean;
+            currencyId: number;
         })[];
     } & {
         id: number;
@@ -49,8 +49,8 @@ export declare class OwnerController {
         createdAt: Date;
         updatedAt: Date;
         siteId: number;
-        currencyId: number;
         isDefault: boolean;
+        currencyId: number;
     }>;
 }
 export declare class CurrencyController {
