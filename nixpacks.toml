@@ -3,3 +3,7 @@ installCanvas = true
 
 [variables]
 NODE_VERSION = "22.12.0"
+PORT = "3000"
+
+[start]
+cmd = "node dist/main"
