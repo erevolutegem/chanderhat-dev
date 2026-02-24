@@ -7,12 +7,20 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  ADMIN
+  OWNER
+  PLAYER
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   email     String   @unique
   name      String?
+  role      Role     @default(PLAYER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  sites     Site[]   @relation("OwnerSites")
 }
 
 model Site {
@@ -23,8 +31,34 @@ model Site {
   logoUrl   String?
   config    Json?    // For theme-specific colors, social links, etc.
   isActive  Boolean  @default(true)
+  ownerId   Int?
+  owner     User?    @relation("OwnerSites", fields: [ownerId], references: [id])
+  currencies SiteCurrency[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Currency {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique // e.g., BDT, INR, USD
+  symbol    String   // e.g., ৳, ₹, $
+  rate      Float    @default(1.0) // Rate relative to base currency
+  sites     SiteCurrency[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SiteCurrency {
+  id         Int      @id @default(autoincrement())
+  siteId     Int
+  currencyId Int
+  isDefault  Boolean  @default(false)
+  site       Site     @relation(fields: [siteId], references: [id])
+  currency   Currency @relation(fields: [currencyId], references: [id])
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([siteId, currencyId])
 }
 
 model Setting {

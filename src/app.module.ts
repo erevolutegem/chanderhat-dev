@@ -12,6 +12,10 @@ import { GamesController } from './games.controller';
 import { PrismaService } from './prisma.service';
 import { SiteService } from './site.service';
 import { SiteController } from './site.controller';
+import { OwnerService } from './owner.service';
+import { OwnerController } from './owner.controller';
+import { CurrencyService } from './currency.service';
+import { CurrencyController } from './currency.controller';
 
 @Module({
   imports: [
@@ -31,7 +35,7 @@ import { SiteController } from './site.controller';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AppController, GamesController, SiteController],
-  providers: [AppService, EventsGateway, RedisService, BetsApiService, PrismaService, SiteService],
+  controllers: [AppController, GamesController, SiteController, OwnerController, CurrencyController],
+  providers: [AppService, EventsGateway, RedisService, BetsApiService, PrismaService, SiteService, OwnerService, CurrencyService],
 })
 export class AppModule { }

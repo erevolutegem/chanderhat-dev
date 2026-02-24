@@ -22,12 +22,18 @@ export class SiteService {
 
         // Find site by domain
         let site = await this.prisma.site.findUnique({
-            where: { domain }
+            where: { domain },
+            include: {
+                currencies: {
+                    include: { currency: true }
+                }
+            }
         });
 
-        // Default to Playbaji if no site found (for backward compatibility or new domains)
+        // Default to Playbaji if no site found
         if (!site) {
             this.logger.warn(`No site found for domain: ${domain}. Using default Playbaji config.`);
+            const defaultCurrency = { code: 'BDT', symbol: '৳', rate: 1.0 };
             site = {
                 id: 0,
                 domain,
@@ -40,6 +46,7 @@ export class SiteService {
                         accent: '#ffc107'
                     }
                 },
+                currencies: [{ isDefault: true, currency: defaultCurrency }],
                 isActive: true,
                 createdAt: new Date(),
                 updatedAt: new Date()
