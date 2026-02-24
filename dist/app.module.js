@@ -37,12 +37,15 @@ exports.AppModule = AppModule = __decorate([
             axios_1.HttpModule,
             bullmq_1.BullModule.forRootAsync({
                 imports: [config_1.ConfigModule],
-                useFactory: (configService) => ({
-                    connection: {
-                        url: configService.get('REDIS_URL'),
-                        maxRetriesPerRequest: null,
-                    },
-                }),
+                useFactory: (configService) => {
+                    const redisUrl = configService.get('REDIS_URL') || 'redis://localhost:6379';
+                    return {
+                        connection: {
+                            url: redisUrl,
+                            maxRetriesPerRequest: null,
+                        },
+                    };
+                },
                 inject: [config_1.ConfigService],
             }),
         ],

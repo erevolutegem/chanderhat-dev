@@ -26,12 +26,15 @@ import { CurrencyController } from './owner.controller';
     HttpModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        connection: {
-          url: configService.get<string>('REDIS_URL'),
-          maxRetriesPerRequest: null,
-        },
-      }),
+      useFactory: (configService: ConfigService) => {
+        const redisUrl = configService.get<string>('REDIS_URL') || 'redis://localhost:6379';
+        return {
+          connection: {
+            url: redisUrl,
+            maxRetriesPerRequest: null,
+          },
+        };
+      },
       inject: [ConfigService],
     }),
   ],
