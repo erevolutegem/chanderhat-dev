@@ -9,6 +9,10 @@ import { RedisService } from './redis.service';
 import { BetsApiService } from './bets-api.service';
 import { GamesController } from './games.controller';
 
+import { PrismaService } from './prisma.service';
+import { SiteService } from './site.service';
+import { SiteController } from './site.controller';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -27,7 +31,7 @@ import { GamesController } from './games.controller';
       inject: [ConfigService],
     }),
   ],
-  controllers: [AppController, GamesController],
-  providers: [AppService, EventsGateway, RedisService, BetsApiService],
+  controllers: [AppController, GamesController, SiteController],
+  providers: [AppService, EventsGateway, RedisService, BetsApiService, PrismaService, SiteService],
 })
 export class AppModule { }

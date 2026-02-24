@@ -15,6 +15,18 @@ model User {
   updatedAt DateTime @updatedAt
 }
 
+model Site {
+  id        Int      @id @default(autoincrement())
+  domain    String   @unique
+  name      String
+  template  String   @default("playbaji")
+  logoUrl   String?
+  config    Json?    // For theme-specific colors, social links, etc.
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Setting {
   id        Int      @id @default(autoincrement())
   key       String   @unique
