@@ -19,18 +19,21 @@ export class BetsApiService {
         const redisClient = this.redisService.getClient();
 
         const endpoints = [
-            'https://api.betsapi.com/v1/events/inplay',
-            'https://api.b365api.com/v1/events/inplay',
             'https://api.betsapi.com/v1/bet365/inplay',
-            'https://api.b365api.com/v1/bet365/inplay'
+            'https://api.b365api.com/v1/bet365/inplay',
+            'https://api.betsapi.com/v1/events/inplay',
+            'https://api.b365api.com/v1/events/inplay'
         ];
 
-        this.logger.log(`Fetching matches v8.0. Token: ${apiKey?.substring(0, 5)}...`);
+        this.logger.log(`Fetching matches v8.1. Token: ${apiKey?.substring(0, 5)}...`);
 
         const cacheKey = sportId ? `betsapi:live_games:${sportId}` : `betsapi:live_games:all`;
         try {
             const cached = await redisClient.get(cacheKey);
-            if (cached) return JSON.parse(cached);
+            if (cached) {
+                this.logger.log(`Serving from cache for key: ${cacheKey}`);
+                return JSON.parse(cached);
+            }
         } catch (err) { }
 
         let allResults: any[] = [];
@@ -42,36 +45,40 @@ export class BetsApiService {
             try {
                 const check = await firstValueFrom(this.httpService.get('https://api.betsapi.com/v1/sport/list', { params: { token: apiKey } }));
                 if (check.data && check.data.success === 1) {
-                    tokenStatus = "Token VALID (Basic endpoints OK)";
+                    tokenStatus = "Token VALID";
                 } else {
-                    tokenStatus = `Token REJECTED (API says: ${check.data?.error || 'Invalid Token'})`;
+                    tokenStatus = `Token REJECTED: ${check.data?.error || 'Unknown error'}`;
                 }
             } catch (e) {
-                tokenStatus = `Token INVALID/Exp or Connection Error (${e.message})`;
+                tokenStatus = `Token Auth Error: ${e.message}`;
             }
 
             const mainSports = sportId ? [sportId] : [1, 3, 13, 18, 12, 4, 16];
+            this.logger.log(`Testing endpoints for sports: ${mainSports.join(',')}. Status: ${tokenStatus}`);
 
             for (const endpoint of endpoints) {
                 let hasData = false;
+                const endpointName = endpoint.includes('bet365') ? 'bet365/inplay' : 'events/inplay';
+
                 const resultsForEndpoint = await Promise.all(mainSports.map(async (sId) => {
                     try {
                         const resp = await firstValueFrom(this.httpService.get(endpoint, { params: { token: apiKey, sport_id: sId } }));
-                        if (resp.data && resp.data.success === 0) {
-                            debugSet.add(`${endpoint.split('/')[4]} -> ${resp.data.error || '403 Forbidden'}`);
-                        }
                         if (resp.data && resp.data.success === 1 && resp.data.results && resp.data.results.length > 0) {
                             hasData = true;
+                            this.logger.log(`SUCCESS: Found ${resp.data.results.length} matches for sport ${sId} via ${endpointName}`);
                             return resp.data.results;
+                        } else if (resp.data && resp.data.success === 0) {
+                            debugSet.add(`${endpointName} (sport ${sId}) -> ${resp.data.error || 'Error'}`);
                         }
                     } catch (e) {
-                        debugSet.add(`${endpoint.split('/')[4]} -> Fail: ${e.message}`);
+                        debugSet.add(`${endpointName} (sport ${sId}) -> Fail: ${e.message}`);
                     }
                     return [];
                 }));
 
                 if (hasData) {
                     allResults = resultsForEndpoint.flat();
+                    this.logger.log(`Total live games found: ${allResults.length}`);
                     break;
                 }
             }
