@@ -15,4 +15,13 @@ export class GamesController {
     async getGameDetails(@Param('id') id: string) {
         return this.betsApiService.getGameDetails(id);
     }
+
+    @Get('upcoming')
+    async getUpcomingGames(
+        @Query('sportId') sportId?: string,
+        @Query('date') date?: string,
+    ) {
+        const id = sportId ? parseInt(sportId, 10) : undefined;
+        return this.betsApiService.getUpcomingGames(id, date ?? 'today');
+    }
 }

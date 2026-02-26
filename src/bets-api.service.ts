@@ -145,6 +145,85 @@ export class BetsApiService {
         }
     }
 
+    async getUpcomingGames(sportId?: number, dateFilter?: string): Promise<any> {
+        const apiKey = this.configService.get<string>('BETS_API_TOKEN');
+        const redisClient = this.redisService.getClient();
+        const cacheKey = `betsapi:upcoming:${sportId ?? 'all'}:${dateFilter ?? 'today'}`;
+
+        try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch (err) { /* ignore */ }
+
+        // Calculate date range based on filter
+        const now = new Date();
+        let startTime: number;
+        let endTime: number;
+
+        if (dateFilter === 'tomorrow') {
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(0, 0, 0, 0);
+            const tomorrowEnd = new Date(tomorrow);
+            tomorrowEnd.setHours(23, 59, 59, 0);
+            startTime = Math.floor(tomorrow.getTime() / 1000);
+            endTime = Math.floor(tomorrowEnd.getTime() / 1000);
+        } else {
+            // Today
+            const todayEnd = new Date(now);
+            todayEnd.setHours(23, 59, 59, 0);
+            startTime = Math.floor(now.getTime() / 1000);
+            endTime = Math.floor(todayEnd.getTime() / 1000);
+        }
+
+        try {
+            const params: any = {
+                token: apiKey,
+                sport_id: sportId || 1,
+                time_type: 1, // Scheduled only
+                page: 1,
+                per_page: 50,
+            };
+
+            const resp = await firstValueFrom(
+                this.httpService.get('https://api.betsapi.com/v1/events/upcoming', {
+                    params,
+                    timeout: 8000,
+                })
+            );
+
+            if (resp.data?.success === 1 && resp.data?.results) {
+                const events = resp.data.results.map((ev: any) => ({
+                    id: String(ev.id || ev.FI),
+                    sport_id: String(sportId || 1),
+                    league: ev.league?.name || 'Unknown League',
+                    home: ev.home?.name || 'Home Team',
+                    away: ev.away?.name || 'Away Team',
+                    name: `${ev.home?.name || 'Home'} vs ${ev.away?.name || 'Away'}`,
+                    ss: null,
+                    timer: null,
+                    time_status: '0', // Scheduled
+                    scheduled_time: ev.time,
+                    is_virtual: false,
+                    odds: [],
+                }));
+
+                const response = {
+                    success: true,
+                    results: events,
+                    count: events.length,
+                    timestamp: new Date().toISOString(),
+                };
+                await redisClient.set(cacheKey, JSON.stringify(response), 'EX', 60).catch(() => { });
+                return response;
+            }
+            return { success: true, results: [], count: 0 };
+        } catch (err: any) {
+            this.logger.error(`getUpcomingGames error: ${err.message}`);
+            return { success: false, results: [], error: err.message };
+        }
+    }
+
     private parseBet365Inplay(results: any[]): any[] {
         if (!results || !Array.isArray(results)) return [];
 
