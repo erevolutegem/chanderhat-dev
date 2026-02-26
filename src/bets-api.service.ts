@@ -76,14 +76,7 @@ export class BetsApiService {
                 }
             }
 
-            // SIMULATOR FALLBACK
-            let isSimulated = false;
-            if (allResults.length === 0) {
-                this.logger.warn("Activating HYBRID SIMULATOR mode due to API restrictions.");
-                allResults = this.getSimulatedLiveGames(sportId);
-                isSimulated = true;
-            }
-
+            // NO FALLBACK - ONLY REAL DATA
             const enrichedResults = allResults.map(item => {
                 let odds = item.odds || null;
                 if (!odds) {
@@ -96,20 +89,13 @@ export class BetsApiService {
                 return { ...item, odds: odds };
             });
 
-            let finalDebug = Array.from(debugSet);
-            if (tokenStatus.includes("VALID") && isSimulated && finalDebug.length > 0) {
-                finalDebug.unshift("PLAN RESTRICTION: Showing Simulated Data for Demo Purposes.");
-            } else {
-                finalDebug.unshift(`Account Status: ${tokenStatus}`);
-            }
-
             const finalResponse = {
                 success: true,
                 results: enrichedResults,
                 timestamp: new Date().toISOString(),
                 count: enrichedResults.length,
-                is_simulated: isSimulated,
-                debug: isSimulated ? finalDebug : undefined
+                is_simulated: false,
+                debug: debugSet.size > 0 ? [tokenStatus, ...Array.from(debugSet)] : undefined
             };
 
             if (enrichedResults.length > 0) {
@@ -120,18 +106,5 @@ export class BetsApiService {
         } catch (err) {
             return { success: false, results: [], error: err.message, debug: [tokenStatus, ...Array.from(debugSet)] };
         }
-    }
-
-    private getSimulatedLiveGames(sportId?: number): any[] {
-        const fallbacks = [
-            { id: "s1", home: { name: "Manchester City" }, away: { name: "Real Madrid" }, sport_id: "1", odds: [{ name: "1", value: "2.10" }, { name: "X", value: "3.45" }, { name: "2", value: "3.20" }] },
-            { id: "s2", home: { name: "India" }, away: { name: "Pakistan" }, sport_id: "3", odds: [{ name: "1", value: "1.85" }, { name: "2", value: "1.95" }] },
-            { id: "s3", home: { name: "Lakers" }, away: { name: "Golden State" }, sport_id: "18", odds: [{ name: "1", value: "1.90" }, { name: "2", value: "1.90" }] },
-            { id: "s4", home: { name: "Alcaraz" }, away: { name: "Sinner" }, sport_id: "13", odds: [{ name: "1", value: "1.65" }, { name: "2", value: "2.25" }] },
-            { id: "s5", home: { name: "PSG" }, away: { name: "Bayern Munich" }, sport_id: "1", odds: [{ name: "1", value: "2.50" }, { name: "X", value: "3.10" }, { name: "2", value: "2.80" }] },
-            { id: "s6", home: { name: "England" }, away: { name: "Australia" }, sport_id: "3", odds: [{ name: "1", value: "2.05" }, { name: "2", value: "1.80" }] },
-        ];
-        if (sportId) return fallbacks.filter(g => g.sport_id === sportId.toString());
-        return fallbacks;
     }
 }
