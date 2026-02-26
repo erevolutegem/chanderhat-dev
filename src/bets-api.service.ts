@@ -8,6 +8,17 @@ import { firstValueFrom } from 'rxjs';
 export class BetsApiService {
     private readonly logger = new Logger(BetsApiService.name);
 
+    // BetsAPI sport IDs mapping
+    private readonly SPORT_IDS: Record<number, string> = {
+        1: 'Soccer',
+        3: 'Cricket',
+        13: 'Tennis',
+        18: 'Basketball',
+        12: 'American Football',
+        4: 'Ice Hockey',
+        16: 'Baseball',
+    };
+
     constructor(
         private readonly httpService: HttpService,
         private readonly configService: ConfigService,
@@ -18,67 +29,86 @@ export class BetsApiService {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
         const redisClient = this.redisService.getClient();
 
-        const endpoints = [
-            'https://api.betsapi.com/v1/bet365/inplay',
-            'https://api.b365api.com/v1/bet365/inplay',
-        ];
+        // Always fetch ALL games first (endpoint ignores sport_id anyway)
+        // Then filter locally. Use a single "all" cache key for the raw data.
+        const rawCacheKey = `betsapi:raw:all`;
+        const filteredCacheKey = sportId ? `betsapi:filtered:${sportId}` : `betsapi:filtered:all`;
 
-        this.logger.log(`Fetching matches v9.0 (Hierarchical). Token: ${apiKey?.substring(0, 5)}...`);
-
-        const cacheKey = sportId ? `betsapi:live_games:${sportId}` : `betsapi:live_games:all`;
+        // Try to serve filtered result from cache
         try {
-            const cached = await redisClient.get(cacheKey);
+            const cached = await redisClient.get(filteredCacheKey);
             if (cached) {
-                this.logger.log(`Serving from cache: ${cacheKey}`);
+                this.logger.log(`Cache hit: ${filteredCacheKey}`);
                 return JSON.parse(cached);
             }
-        } catch (err) { }
+        } catch (err) { /* ignore */ }
 
-        let allParsedResults: any[] = [];
-        let debugInfo: string[] = [];
+        this.logger.log(`Fetching live games v10.0. sportId filter: ${sportId ?? 'ALL'}. Token: ${apiKey?.substring(0, 8)}...`);
+
+        // Try to use cached raw data to avoid repeated API calls
+        let allEvents: any[] = [];
+        let fromCache = false;
 
         try {
-            const sportsToFetch = sportId ? [sportId] : [1, 13, 18, 12, 4, 16]; // Soccer, Tennis, Basketball, etc.
+            const cachedRaw = await redisClient.get(rawCacheKey);
+            if (cachedRaw) {
+                allEvents = JSON.parse(cachedRaw);
+                fromCache = true;
+                this.logger.log(`Using cached raw events (${allEvents.length} total)`);
+            }
+        } catch (err) { /* ignore */ }
+
+        if (!fromCache) {
+            const endpoints = [
+                'https://api.betsapi.com/v1/bet365/inplay',
+                'https://api.b365api.com/v1/bet365/inplay',
+            ];
 
             for (const endpoint of endpoints) {
-                const resultsForEndpoint = await Promise.all(sportsToFetch.map(async (sId) => {
-                    try {
-                        const resp = await firstValueFrom(this.httpService.get(endpoint, { params: { token: apiKey, sport_id: sId } }));
-                        if (resp.data && resp.data.success === 1 && resp.data.results) {
-                            const parsed = this.parseBet365Inplay(resp.data.results);
-                            if (parsed.length > 0) {
-                                this.logger.log(`SUCCESS: Found ${parsed.length} real matches for sport ${sId} via ${endpoint}`);
-                                return parsed;
-                            }
+                try {
+                    const resp = await firstValueFrom(
+                        this.httpService.get(endpoint, { params: { token: apiKey }, timeout: 10000 })
+                    );
+
+                    if (resp.data?.success === 1 && resp.data?.results) {
+                        allEvents = this.parseBet365Inplay(resp.data.results);
+                        this.logger.log(`SUCCESS: Parsed ${allEvents.length} real events from ${endpoint}`);
+
+                        if (allEvents.length > 0) {
+                            // Cache raw parsed events for 20s
+                            await redisClient.set(rawCacheKey, JSON.stringify(allEvents), 'EX', 20).catch(() => { });
+                            break;
                         }
-                    } catch (e) {
-                        debugInfo.push(`Error ${endpoint} (sport ${sId}): ${e.message}`);
+                    } else {
+                        this.logger.warn(`API returned no data from ${endpoint}: ${JSON.stringify(resp.data)?.substring(0, 200)}`);
                     }
-                    return [];
-                }));
-
-                allParsedResults = resultsForEndpoint.flat();
-                if (allParsedResults.length > 0) break;
+                } catch (e: any) {
+                    this.logger.error(`Error fetching from ${endpoint}: ${e.message}`);
+                }
             }
-
-            const finalResponse = {
-                success: true,
-                results: allParsedResults,
-                timestamp: new Date().toISOString(),
-                count: allParsedResults.length,
-                is_simulated: false,
-                debug: debugInfo.length > 0 ? debugInfo : undefined
-            };
-
-            if (allParsedResults.length > 0) {
-                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 15).catch(() => { });
-            }
-            return finalResponse;
-
-        } catch (err) {
-            this.logger.error(`Critical error in getLiveGames: ${err.message}`);
-            return { success: false, results: [], error: err.message };
         }
+
+        // Now filter locally by sport_id if needed
+        const filteredEvents = sportId
+            ? allEvents.filter(ev => String(ev.sport_id) === String(sportId))
+            : allEvents;
+
+        this.logger.log(`Returning ${filteredEvents.length} events (filter: ${sportId ?? 'ALL'})`);
+
+        const finalResponse = {
+            success: true,
+            results: filteredEvents,
+            timestamp: new Date().toISOString(),
+            count: filteredEvents.length,
+            is_simulated: false,
+        };
+
+        // Cache filtered for 15s
+        if (filteredEvents.length > 0) {
+            await redisClient.set(filteredCacheKey, JSON.stringify(finalResponse), 'EX', 15).catch(() => { });
+        }
+
+        return finalResponse;
     }
 
     async getGameDetails(eventId: string): Promise<any> {
@@ -89,24 +119,28 @@ export class BetsApiService {
         try {
             const cached = await redisClient.get(cacheKey);
             if (cached) return JSON.parse(cached);
-        } catch (err) { }
+        } catch (err) { /* ignore */ }
 
         try {
-            // Using B365 Event view tool to get all markers and stats
-            const url = `https://api.betsapi.com/v1/bet365/event`;
-            const resp = await firstValueFrom(this.httpService.get(url, { params: { token: apiKey, FI: eventId } }));
+            const resp = await firstValueFrom(
+                this.httpService.get('https://api.betsapi.com/v1/bet365/event', {
+                    params: { token: apiKey, FI: eventId },
+                    timeout: 8000,
+                })
+            );
 
-            if (resp.data && resp.data.success === 1 && resp.data.results) {
+            if (resp.data?.success === 1 && resp.data?.results) {
                 const finalResponse = {
                     success: true,
                     results: resp.data.results,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
                 };
                 await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 10).catch(() => { });
                 return finalResponse;
             }
-            return { success: false, error: 'Event not found or API error' };
-        } catch (err) {
+            return { success: false, error: 'Event not found' };
+        } catch (err: any) {
+            this.logger.error(`getGameDetails error for ${eventId}: ${err.message}`);
             return { success: false, error: err.message };
         }
     }
@@ -114,58 +148,75 @@ export class BetsApiService {
     private parseBet365Inplay(results: any[]): any[] {
         if (!results || !Array.isArray(results)) return [];
 
-        const items = Array.isArray(results[0]) ? results[0] : results;
+        // The API returns results[0] as the flat items array
+        const items: any[] = Array.isArray(results[0]) ? results[0] : results;
         const events: any[] = [];
         let currentCT: any = null;
         let currentEV: any = null;
         let currentMA: any = null;
 
         for (const item of items) {
+            if (!item || !item.type) continue;
+
             if (item.type === 'CT') {
                 currentCT = item;
+                currentEV = null;
             } else if (item.type === 'EV') {
-                // ROBUST VIRTUAL FILTERING
                 const leagueName = (currentCT?.NA || '').toLowerCase();
                 const eventName = (item.NA || '').toLowerCase();
 
+                // Filter out virtual/esports matches
                 const isVirtual =
                     item.VI === '1' ||
                     leagueName.includes('esoccer') ||
                     leagueName.includes('ebasketball') ||
+                    leagueName.includes('evirtual') ||
                     leagueName.includes('volta') ||
                     eventName.includes('esoccer') ||
-                    eventName.includes('ebasketball') ||
-                    (item.HP === '1' && (item.TU || '').includes('VIRTUAL')); // Extra check for virtual flags
+                    eventName.includes('ebasketball');
 
                 if (isVirtual) {
                     currentEV = null;
                     continue;
                 }
 
+                // Extract home / away from "Team A v Team B" or "Team A vs Team B"
+                const nameParts = (item.NA || '').split(/\s+v(?:s)?\s+/i);
+                const home = (nameParts[0] || 'Home').trim();
+                const away = (nameParts[1] || 'Away').trim();
+
                 currentEV = {
-                    id: item.ID,
-                    sport_id: item.CL || null,
-                    league: currentCT ? currentCT.NA : 'Unknown League',
-                    home: item.NA?.split(' v ')[0] || 'Team A',
-                    away: item.NA?.split(' v ')[1] || 'Team B',
-                    name: item.NA,
+                    id: item.ID || item.FI,
+                    sport_id: item.CL || currentCT?.CL || null,
+                    league: currentCT?.NA || 'Unknown League',
+                    home,
+                    away,
+                    name: item.NA || `${home} vs ${away}`,
                     ss: item.SS || '0-0',
                     timer: item.TM || '0',
-                    time_status: item.TT || '0',
+                    time_status: item.TT || '1',
                     is_virtual: false,
-                    odds: []
+                    odds: [],
                 };
                 events.push(currentEV);
             } else if (item.type === 'MA' && currentEV) {
                 currentMA = item;
             } else if (item.type === 'PA' && currentEV && currentMA) {
-                // Map Fulltime Result (1777) or Match Winner (H2H)
-                if (currentMA.ID === '1777' || currentMA.NA?.toLowerCase().includes('result') || currentMA.NA?.toLowerCase().includes('winner')) {
+                // Capture main match odds (Fulltime Result / Match Winner)
+                if (
+                    currentMA.ID === '1777' ||
+                    currentMA.NA?.toLowerCase().includes('result') ||
+                    currentMA.NA?.toLowerCase().includes('winner') ||
+                    currentMA.NA?.toLowerCase().includes('moneyline') ||
+                    currentMA.NA?.toLowerCase().includes('match')
+                ) {
                     const label = item.OR === '0' ? '1' : (item.OR === '1' ? 'X' : '2');
                     currentEV.odds.push({ name: label, value: item.OD });
                 }
             }
         }
+
+        this.logger.log(`Parser: found ${events.length} non-virtual events from ${items.length} raw items`);
         return events;
     }
 }
