@@ -3,4 +3,5 @@ export declare class GamesController {
     private readonly betsApiService;
     constructor(betsApiService: BetsApiService);
     getLiveGames(sportId?: string): Promise<any>;
+    getGameDetails(id: string): Promise<any>;
 }

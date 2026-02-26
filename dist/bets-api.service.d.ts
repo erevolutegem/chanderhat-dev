@@ -8,5 +8,6 @@ export declare class BetsApiService {
     private readonly logger;
     constructor(httpService: HttpService, configService: ConfigService, redisService: RedisService);
     getLiveGames(sportId?: number): Promise<any>;
+    getGameDetails(eventId: string): Promise<any>;
     private parseBet365Inplay;
 }

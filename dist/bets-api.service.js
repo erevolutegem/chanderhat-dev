@@ -86,6 +86,34 @@ let BetsApiService = BetsApiService_1 = class BetsApiService {
             return { success: false, results: [], error: err.message };
         }
     }
+    async getGameDetails(eventId) {
+        const apiKey = this.configService.get('BETS_API_TOKEN');
+        const redisClient = this.redisService.getClient();
+        const cacheKey = `betsapi:game_details:${eventId}`;
+        try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached)
+                return JSON.parse(cached);
+        }
+        catch (err) { }
+        try {
+            const url = `https://api.betsapi.com/v1/bet365/event`;
+            const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get(url, { params: { token: apiKey, FI: eventId } }));
+            if (resp.data && resp.data.success === 1 && resp.data.results) {
+                const finalResponse = {
+                    success: true,
+                    results: resp.data.results,
+                    timestamp: new Date().toISOString()
+                };
+                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 10).catch(() => { });
+                return finalResponse;
+            }
+            return { success: false, error: 'Event not found or API error' };
+        }
+        catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
     parseBet365Inplay(results) {
         if (!results || !Array.isArray(results))
             return [];

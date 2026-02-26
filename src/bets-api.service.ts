@@ -81,6 +81,36 @@ export class BetsApiService {
         }
     }
 
+    async getGameDetails(eventId: string): Promise<any> {
+        const apiKey = this.configService.get<string>('BETS_API_TOKEN');
+        const redisClient = this.redisService.getClient();
+        const cacheKey = `betsapi:game_details:${eventId}`;
+
+        try {
+            const cached = await redisClient.get(cacheKey);
+            if (cached) return JSON.parse(cached);
+        } catch (err) { }
+
+        try {
+            // Using B365 Event view tool to get all markers and stats
+            const url = `https://api.betsapi.com/v1/bet365/event`;
+            const resp = await firstValueFrom(this.httpService.get(url, { params: { token: apiKey, FI: eventId } }));
+
+            if (resp.data && resp.data.success === 1 && resp.data.results) {
+                const finalResponse = {
+                    success: true,
+                    results: resp.data.results,
+                    timestamp: new Date().toISOString()
+                };
+                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 10).catch(() => { });
+                return finalResponse;
+            }
+            return { success: false, error: 'Event not found or API error' };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
     private parseBet365Inplay(results: any[]): any[] {
         if (!results || !Array.isArray(results)) return [];
 

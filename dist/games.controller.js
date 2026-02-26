@@ -24,6 +24,9 @@ let GamesController = class GamesController {
         const id = sportId ? parseInt(sportId, 10) : undefined;
         return this.betsApiService.getLiveGames(id);
     }
+    async getGameDetails(id) {
+        return this.betsApiService.getGameDetails(id);
+    }
 };
 exports.GamesController = GamesController;
 __decorate([
@@ -33,6 +36,13 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], GamesController.prototype, "getLiveGames", null);
+__decorate([
+    (0, common_1.Get)('details/:id'),
+    __param(0, (0, common_1.Param)('id')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], GamesController.prototype, "getGameDetails", null);
 exports.GamesController = GamesController = __decorate([
     (0, common_1.Controller)('games'),
     __metadata("design:paramtypes", [bets_api_service_1.BetsApiService])

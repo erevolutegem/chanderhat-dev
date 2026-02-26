@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Param } from '@nestjs/common';
 import { BetsApiService } from './bets-api.service';
 
 @Controller('games')
@@ -9,5 +9,10 @@ export class GamesController {
     async getLiveGames(@Query('sportId') sportId?: string) {
         const id = sportId ? parseInt(sportId, 10) : undefined;
         return this.betsApiService.getLiveGames(id);
+    }
+
+    @Get('details/:id')
+    async getGameDetails(@Param('id') id: string) {
+        return this.betsApiService.getGameDetails(id);
     }
 }
