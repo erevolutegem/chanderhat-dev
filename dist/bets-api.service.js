@@ -30,112 +30,114 @@ let BetsApiService = BetsApiService_1 = class BetsApiService {
         const apiKey = this.configService.get('BETS_API_TOKEN');
         const redisClient = this.redisService.getClient();
         const endpoints = [
-            'https://api.betsapi.com/v1/events/inplay',
-            'https://api.b365api.com/v1/events/inplay',
             'https://api.betsapi.com/v1/bet365/inplay',
-            'https://api.b365api.com/v1/bet365/inplay'
+            'https://api.b365api.com/v1/bet365/inplay',
         ];
-        this.logger.log(`Fetching matches v8.0. Token: ${apiKey?.substring(0, 5)}...`);
+        this.logger.log(`Fetching matches v9.0 (Hierarchical). Token: ${apiKey?.substring(0, 5)}...`);
         const cacheKey = sportId ? `betsapi:live_games:${sportId}` : `betsapi:live_games:all`;
         try {
             const cached = await redisClient.get(cacheKey);
-            if (cached)
+            if (cached) {
+                this.logger.log(`Serving from cache: ${cacheKey}`);
                 return JSON.parse(cached);
+            }
         }
         catch (err) { }
-        let allResults = [];
-        let debugSet = new Set();
-        let tokenStatus = "Unknown";
+        let allParsedResults = [];
+        let debugInfo = [];
         try {
-            try {
-                const check = await (0, rxjs_1.firstValueFrom)(this.httpService.get('https://api.betsapi.com/v1/sport/list', { params: { token: apiKey } }));
-                if (check.data && check.data.success === 1) {
-                    tokenStatus = "Token VALID (Basic endpoints OK)";
-                }
-                else {
-                    tokenStatus = `Token REJECTED (API says: ${check.data?.error || 'Invalid Token'})`;
-                }
-            }
-            catch (e) {
-                tokenStatus = `Token INVALID/Exp or Connection Error (${e.message})`;
-            }
-            const mainSports = sportId ? [sportId] : [1, 3, 13, 18, 12, 4, 16];
+            const sportsToFetch = sportId ? [sportId] : [1, 13, 18, 12, 4, 16];
             for (const endpoint of endpoints) {
-                let hasData = false;
-                const resultsForEndpoint = await Promise.all(mainSports.map(async (sId) => {
+                const resultsForEndpoint = await Promise.all(sportsToFetch.map(async (sId) => {
                     try {
                         const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get(endpoint, { params: { token: apiKey, sport_id: sId } }));
-                        if (resp.data && resp.data.success === 0) {
-                            debugSet.add(`${endpoint.split('/')[4]} -> ${resp.data.error || '403 Forbidden'}`);
-                        }
-                        if (resp.data && resp.data.success === 1 && resp.data.results && resp.data.results.length > 0) {
-                            hasData = true;
-                            return resp.data.results;
+                        if (resp.data && resp.data.success === 1 && resp.data.results) {
+                            const parsed = this.parseBet365Inplay(resp.data.results);
+                            if (parsed.length > 0) {
+                                this.logger.log(`SUCCESS: Found ${parsed.length} real matches for sport ${sId} via ${endpoint}`);
+                                return parsed;
+                            }
                         }
                     }
                     catch (e) {
-                        debugSet.add(`${endpoint.split('/')[4]} -> Fail: ${e.message}`);
+                        debugInfo.push(`Error ${endpoint} (sport ${sId}): ${e.message}`);
                     }
                     return [];
                 }));
-                if (hasData) {
-                    allResults = resultsForEndpoint.flat();
+                allParsedResults = resultsForEndpoint.flat();
+                if (allParsedResults.length > 0)
                     break;
-                }
-            }
-            let isSimulated = false;
-            if (allResults.length === 0) {
-                this.logger.warn("Activating HYBRID SIMULATOR mode due to API restrictions.");
-                allResults = this.getSimulatedLiveGames(sportId);
-                isSimulated = true;
-            }
-            const enrichedResults = allResults.map(item => {
-                let odds = item.odds || null;
-                if (!odds) {
-                    const markets = item.main?.sp || {};
-                    const targetMarket = markets.full_time_result || markets.match_winner || markets.to_win_the_match || markets.h2h;
-                    if (targetMarket && Array.isArray(targetMarket.odds)) {
-                        odds = targetMarket.odds.map(o => ({ name: o.header || o.name, value: o.odds }));
-                    }
-                }
-                return { ...item, odds: odds };
-            });
-            let finalDebug = Array.from(debugSet);
-            if (tokenStatus.includes("VALID") && isSimulated && finalDebug.length > 0) {
-                finalDebug.unshift("PLAN RESTRICTION: Showing Simulated Data for Demo Purposes.");
-            }
-            else {
-                finalDebug.unshift(`Account Status: ${tokenStatus}`);
             }
             const finalResponse = {
                 success: true,
-                results: enrichedResults,
+                results: allParsedResults,
                 timestamp: new Date().toISOString(),
-                count: enrichedResults.length,
-                is_simulated: isSimulated,
-                debug: isSimulated ? finalDebug : undefined
+                count: allParsedResults.length,
+                is_simulated: false,
+                debug: debugInfo.length > 0 ? debugInfo : undefined
             };
-            if (enrichedResults.length > 0) {
-                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 10).catch(() => { });
+            if (allParsedResults.length > 0) {
+                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 15).catch(() => { });
             }
             return finalResponse;
         }
         catch (err) {
-            return { success: false, results: [], error: err.message, debug: [tokenStatus, ...Array.from(debugSet)] };
+            this.logger.error(`Critical error in getLiveGames: ${err.message}`);
+            return { success: false, results: [], error: err.message };
         }
     }
-    getSimulatedLiveGames(sportId) {
-        const fallbacks = [
-            { id: "s1", home: { name: "Manchester City" }, away: { name: "Real Madrid" }, sport_id: "1", odds: [{ name: "1", value: "2.10" }, { name: "X", value: "3.45" }, { name: "2", value: "3.20" }] },
-            { id: "s2", home: { name: "India" }, away: { name: "Pakistan" }, sport_id: "3", odds: [{ name: "1", value: "1.85" }, { name: "2", value: "1.95" }] },
-            { id: "s3", home: { name: "Lakers" }, away: { name: "Golden State" }, sport_id: "18", odds: [{ name: "1", value: "1.90" }, { name: "2", value: "1.90" }] },
-            { id: "s4", home: { name: "Alcaraz" }, away: { name: "Sinner" }, sport_id: "13", odds: [{ name: "1", value: "1.65" }, { name: "2", value: "2.25" }] },
-            { id: "s5", home: { name: "PSG" }, away: { name: "Bayern Munich" }, sport_id: "1", odds: [{ name: "1", value: "2.50" }, { name: "X", value: "3.10" }, { name: "2", value: "2.80" }] },
-            { id: "s6", home: { name: "England" }, away: { name: "Australia" }, sport_id: "3", odds: [{ name: "1", value: "2.05" }, { name: "2", value: "1.80" }] },
-        ];
-        if (sportId)
-            return fallbacks.filter(g => g.sport_id === sportId.toString());
-        return fallbacks;
+    parseBet365Inplay(results) {
+        if (!results || !Array.isArray(results))
+            return [];
+        const items = Array.isArray(results[0]) ? results[0] : results;
+        const events = [];
+        let currentCT = null;
+        let currentEV = null;
+        let currentMA = null;
+        for (const item of items) {
+            if (item.type === 'CT') {
+                currentCT = item;
+            }
+            else if (item.type === 'EV') {
+                const leagueName = (currentCT?.NA || '').toLowerCase();
+                const eventName = (item.NA || '').toLowerCase();
+                const isVirtual = item.VI === '1' ||
+                    leagueName.includes('esoccer') ||
+                    leagueName.includes('ebasketball') ||
+                    leagueName.includes('volta') ||
+                    eventName.includes('esoccer') ||
+                    eventName.includes('ebasketball') ||
+                    (item.HP === '1' && (item.TU || '').includes('VIRTUAL'));
+                if (isVirtual) {
+                    currentEV = null;
+                    continue;
+                }
+                currentEV = {
+                    id: item.ID,
+                    sport_id: item.CL || null,
+                    league: currentCT ? currentCT.NA : 'Unknown League',
+                    home: item.NA?.split(' v ')[0] || 'Team A',
+                    away: item.NA?.split(' v ')[1] || 'Team B',
+                    name: item.NA,
+                    ss: item.SS || '0-0',
+                    timer: item.TM || '0',
+                    time_status: item.TT || '0',
+                    is_virtual: false,
+                    odds: []
+                };
+                events.push(currentEV);
+            }
+            else if (item.type === 'MA' && currentEV) {
+                currentMA = item;
+            }
+            else if (item.type === 'PA' && currentEV && currentMA) {
+                if (currentMA.ID === '1777' || currentMA.NA?.toLowerCase().includes('result') || currentMA.NA?.toLowerCase().includes('winner')) {
+                    const label = item.OR === '0' ? '1' : (item.OR === '1' ? 'X' : '2');
+                    currentEV.odds.push({ name: label, value: item.OD });
+                }
+            }
+        }
+        return events;
     }
 };
 exports.BetsApiService = BetsApiService;
