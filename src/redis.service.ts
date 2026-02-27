@@ -37,6 +37,15 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
         this.redisClient.on('ready', () => {
             this.logger.log('Redis ready ✅');
+            // Disable RDB write-blocking — critical for Docker/Coolify where disk
+            // may be restricted. Prevents "MISCONF Redis is configured to save RDB
+            // snapshots" 500 errors. Safe to ignore if not permitted.
+            this.redisClient!.config('SET', 'stop-writes-on-bgsave-error', 'no')
+                .then(() => this.logger.log('Redis: disabled stop-writes-on-bgsave-error ✅'))
+                .catch((e) => this.logger.warn(`Redis CONFIG SET skipped: ${e.message}`));
+            // Also disable RDB persistence entirely (no disk writes needed for cache/queue)
+            this.redisClient!.config('SET', 'save', '')
+                .catch(() => {/* ok if not permitted */ });
         });
 
         this.redisClient.on('error', (err) => {
