@@ -8,7 +8,7 @@ import { EventsGateway } from './events.gateway';
 import { RedisService } from './redis.service';
 import { BetsApiService } from './bets-api.service';
 import { GamesController } from './games.controller';
-
+import { LiveScoresProcessor } from './live-scores.processor';
 import { PrismaService } from './prisma.service';
 import { SiteService } from './site.service';
 import { SiteController } from './site.controller';
@@ -24,6 +24,7 @@ import { CurrencyController } from './owner.controller';
       envFilePath: '.env',
     }),
     HttpModule,
+    // BullMQ — connects to Redis; if REDIS_URL is missing it will log a warning
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => {
@@ -32,13 +33,27 @@ import { CurrencyController } from './owner.controller';
           connection: {
             url: redisUrl,
             maxRetriesPerRequest: null,
+            enableReadyCheck: false, // don't block startup waiting for Redis
+            lazyConnect: true,
           },
         };
       },
       inject: [ConfigService],
     }),
+    // Register the live-scores queue
+    BullModule.registerQueue({ name: 'live-scores' }),
   ],
   controllers: [AppController, GamesController, SiteController, OwnerController, CurrencyController],
-  providers: [AppService, EventsGateway, RedisService, BetsApiService, PrismaService, SiteService, OwnerService, CurrencyService],
+  providers: [
+    AppService,
+    EventsGateway,
+    RedisService,
+    BetsApiService,
+    LiveScoresProcessor,    // BullMQ worker — polls BetsAPI + pushes to Socket.io
+    PrismaService,
+    SiteService,
+    OwnerService,
+    CurrencyService,
+  ],
 })
 export class AppModule { }

@@ -4,15 +4,22 @@ import { ConfigService } from '@nestjs/config';
 import { RedisService } from './redis.service';
 import { firstValueFrom } from 'rxjs';
 
-// BetsAPI official sport IDs
-const SPORTS: { id: number; name: string }[] = [
-    { id: 1, name: 'Soccer' },
-    { id: 3, name: 'Cricket' },
-    { id: 13, name: 'Tennis' },
-    { id: 18, name: 'Basketball' },
-    { id: 12, name: 'American Football' },
-    { id: 4, name: 'Ice Hockey' },
-];
+// BetsAPI sport IDs from event ID pattern C{n}A
+const SPORT_MAP: Record<number, string> = {
+    1: 'Soccer', 3: 'Cricket', 13: 'Tennis',
+    17: 'Ice Hockey', 18: 'Basketball', 12: 'American Football',
+};
+const INCLUDED_SPORTS = new Set([1, 3, 13, 17, 18, 12]);
+const SKIP_NAMES = ['esoccer', 'ebasketball', 'cs2', 'valorant', 'virtual', 'sports based games'];
+
+// Map BetsAPI sport IDs → our app sport IDs (Ice Hockey: BetsAPI=17, we use 4)
+const APP_SPORT_ID: Record<number, number> = {
+    1: 1, 3: 3, 13: 13, 17: 4, 18: 18, 12: 12,
+};
+// Reverse: our sport IDs → BetsAPI sport IDs for filtering
+const TO_BETS_SPORT_ID: Record<number, number> = {
+    1: 1, 3: 3, 13: 13, 4: 17, 18: 18, 12: 12,
+};
 
 @Injectable()
 export class BetsApiService {
@@ -24,178 +31,111 @@ export class BetsApiService {
         private readonly redisService: RedisService,
     ) { }
 
-    /**
-     * Fetch live in-play events using /v1/events/inplay
-     * This endpoint properly supports sport_id filtering.
-     */
+    private parseBet365Stream(items: any[]): any[] {
+        const events: any[] = [];
+        let currentLeague = 'Unknown League';
+
+        for (const item of items) {
+            if (!item?.type) continue;
+
+            if (item.type === 'CT') {
+                currentLeague = item.NA || 'Unknown League';
+            } else if (item.type === 'EV') {
+                const id = item.ID || item.FI || '';
+                const m = id.match(/C(\d+)A/);
+                if (!m) continue;
+
+                const betsApiSport = parseInt(m[1], 10);
+                if (!INCLUDED_SPORTS.has(betsApiSport)) continue;
+
+                const league = currentLeague.toLowerCase();
+                if (SKIP_NAMES.some(s => league.includes(s))) continue;
+
+                const appSportId = APP_SPORT_ID[betsApiSport] ?? betsApiSport;
+                const nameParts = (item.NA || '').split(/\s+v(?:s)?\s+/i);
+                const home = nameParts[0]?.trim() || item.NA || 'Home';
+                const away = nameParts[1]?.trim() || 'Away';
+
+                events.push({
+                    id,
+                    sport_id: String(appSportId),
+                    league: currentLeague,
+                    home,
+                    away,
+                    name: item.NA || `${home} vs ${away}`,
+                    ss: item.SS || null,
+                    timer: item.TM || null,
+                    time_status: '1',
+                    odds: [],
+                });
+            } else if (item.type === 'PA' && events.length > 0) {
+                const last = events[events.length - 1];
+                if (last.odds.length < 3 && item.OD) {
+                    const label = item.OR === '0' ? '1' : item.OR === '1' ? 'X' : '2';
+                    last.odds.push({ name: label, value: item.OD });
+                }
+            }
+        }
+        return events;
+    }
+
     async getLiveGames(sportId?: number): Promise<any> {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
-        const redisClient = this.redisService.getClient();
-        const cacheKey = `betsapi:inplay:v2:${sportId ?? 'all'}`;
+        const appSportId = sportId;
+        const cacheKey = `betsapi:live:v3:${appSportId ?? 'all'}`;
 
-        try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) {
-                this.logger.log(`Cache HIT: ${cacheKey}`);
-                return JSON.parse(cached);
-            }
-        } catch (_) { /* ignore */ }
-
-        this.logger.log(`Fetching inplay. sportId=${sportId ?? 'ALL'}. Token: ${apiKey?.slice(0, 8)}...`);
-
-        const sportsToFetch = sportId
-            ? [{ id: sportId, name: SPORTS.find(s => s.id === sportId)?.name ?? 'Sport' }]
-            : SPORTS;
-
-        const allEvents: any[] = [];
-
-        await Promise.all(sportsToFetch.map(async (sport) => {
-            try {
-                // Use the standard inplay endpoint — properly filters by sport_id
-                const resp = await firstValueFrom(
-                    this.httpService.get('https://api.betsapi.com/v1/events/inplay', {
-                        params: {
-                            token: apiKey,
-                            sport_id: sport.id,
-                        },
-                        timeout: 10000,
-                    })
-                );
-
-                if (resp.data?.success === 1 && Array.isArray(resp.data?.results)) {
-                    const events = resp.data.results.map((ev: any) => ({
-                        id: String(ev.id),
-                        sport_id: String(sport.id),
-                        league: ev.league?.name || 'Unknown League',
-                        home: ev.home?.name || 'Home',
-                        away: ev.away?.name || 'Away',
-                        name: `${ev.home?.name} vs ${ev.away?.name}`,
-                        ss: ev.ss || null,
-                        timer: ev.timer?.tm || null,
-                        time_status: String(ev.time_status || '1'),
-                        is_virtual: false,
-                        odds: [],
-                    })).filter((ev: any) =>
-                        // Skip virtual matches
-                        !ev.league?.toLowerCase().includes('esoccer') &&
-                        !ev.league?.toLowerCase().includes('ebasketball') &&
-                        !ev.home?.toLowerCase().includes('virtual')
-                    );
-
-                    this.logger.log(`${sport.name} (id=${sport.id}): ${events.length} live events`);
-                    allEvents.push(...events);
-                } else {
-                    this.logger.warn(`${sport.name}: no results. success=${resp.data?.success}`);
-                }
-            } catch (e: any) {
-                this.logger.warn(`Error fetching inplay for ${sport.name}: ${e.message}`);
-            }
-        }));
-
-        this.logger.log(`Total live events: ${allEvents.length}`);
-
-        const response = {
-            success: true,
-            results: allEvents,
-            count: allEvents.length,
-            timestamp: new Date().toISOString(),
-            is_simulated: false,
-        };
-
-        if (allEvents.length > 0) {
-            await redisClient.set(cacheKey, JSON.stringify(response), 'EX', 20).catch(() => { });
+        const cached = await this.redisService.get(cacheKey);
+        if (cached) {
+            this.logger.log(`Cache HIT: ${cacheKey}`);
+            return JSON.parse(cached);
         }
 
-        return response;
-    }
-
-    /**
-     * Fetch upcoming (scheduled) events using /v1/events/upcoming
-     */
-    async getUpcomingGames(sportId?: number, dateFilter?: string): Promise<any> {
-        const apiKey = this.configService.get<string>('BETS_API_TOKEN');
-        const redisClient = this.redisService.getClient();
-        const cacheKey = `betsapi:upcoming:v2:${sportId ?? 'all'}:${dateFilter ?? 'today'}`;
+        this.logger.log(`Fetching bet365/inplay. sportId=${appSportId ?? 'ALL'}`);
 
         try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) return JSON.parse(cached);
-        } catch (_) { /* ignore */ }
+            const resp = await firstValueFrom(
+                this.httpService.get('https://api.betsapi.com/v1/bet365/inplay', {
+                    params: { token: apiKey },
+                    timeout: 15000,
+                })
+            );
 
-        const sportsToFetch = sportId
-            ? [{ id: sportId, name: SPORTS.find(s => s.id === sportId)?.name ?? 'Sport' }]
-            : SPORTS;
-
-        const allEvents: any[] = [];
-
-        // Calculate day_offset: 0 = today, 1 = tomorrow
-        const dayOffset = dateFilter === 'tomorrow' ? 1 : 0;
-
-        await Promise.all(sportsToFetch.map(async (sport) => {
-            try {
-                const resp = await firstValueFrom(
-                    this.httpService.get('https://api.betsapi.com/v1/events/upcoming', {
-                        params: {
-                            token: apiKey,
-                            sport_id: sport.id,
-                            day: dayOffset,
-                            page: 1,
-                            per_page: 50,
-                        },
-                        timeout: 10000,
-                    })
-                );
-
-                if (resp.data?.success === 1 && Array.isArray(resp.data?.results)) {
-                    const events = resp.data.results.map((ev: any) => ({
-                        id: String(ev.id),
-                        sport_id: String(sport.id),
-                        league: ev.league?.name || 'Unknown League',
-                        home: ev.home?.name || 'Home',
-                        away: ev.away?.name || 'Away',
-                        name: `${ev.home?.name} vs ${ev.away?.name}`,
-                        ss: null,
-                        timer: null,
-                        time_status: '0',
-                        scheduled_time: ev.time,
-                        is_virtual: false,
-                        odds: [],
-                    }));
-
-                    this.logger.log(`${sport.name} upcoming: ${events.length} events`);
-                    allEvents.push(...events);
-                }
-            } catch (e: any) {
-                this.logger.warn(`Upcoming error for ${sport.name}: ${e.message}`);
+            if (resp.data?.success !== 1) {
+                this.logger.warn('BetsAPI returned success=0');
+                return { success: false, results: [], count: 0 };
             }
-        }));
 
-        const response = {
-            success: true,
-            results: allEvents,
-            count: allEvents.length,
-            timestamp: new Date().toISOString(),
-        };
+            const rawItems: any[] = Array.isArray(resp.data.results?.[0])
+                ? resp.data.results[0]
+                : resp.data.results || [];
 
-        if (allEvents.length > 0) {
-            await redisClient.set(cacheKey, JSON.stringify(response), 'EX', 60).catch(() => { });
+            let events = this.parseBet365Stream(rawItems);
+
+            if (appSportId !== undefined) {
+                events = events.filter(ev => ev.sport_id === String(appSportId));
+            }
+
+            const response = {
+                success: true,
+                results: events,
+                count: events.length,
+                timestamp: new Date().toISOString(),
+            };
+
+            await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', 25);
+            return response;
+        } catch (e: any) {
+            this.logger.error(`getLiveGames failed: ${e.message}`);
+            return { success: false, results: [], count: 0, error: e.message };
         }
-
-        return response;
     }
 
-    /**
-     * Fetch detailed event info including odds via Bet365 event endpoint
-     */
     async getGameDetails(eventId: string): Promise<any> {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
-        const redisClient = this.redisService.getClient();
         const cacheKey = `betsapi:details:${eventId}`;
 
-        try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) return JSON.parse(cached);
-        } catch (_) { /* ignore */ }
+        const cached = await this.redisService.get(cacheKey);
+        if (cached) return JSON.parse(cached);
 
         try {
             const resp = await firstValueFrom(
@@ -206,12 +146,8 @@ export class BetsApiService {
             );
 
             if (resp.data?.success === 1 && resp.data?.results) {
-                const response = {
-                    success: true,
-                    results: resp.data.results,
-                    timestamp: new Date().toISOString(),
-                };
-                await redisClient.set(cacheKey, JSON.stringify(response), 'EX', 10).catch(() => { });
+                const response = { success: true, results: resp.data.results, timestamp: new Date().toISOString() };
+                await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', 10);
                 return response;
             }
             return { success: false, error: 'Event not found' };
