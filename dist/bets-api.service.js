@@ -14,165 +14,162 @@ exports.BetsApiService = void 0;
 const common_1 = require("@nestjs/common");
 const axios_1 = require("@nestjs/axios");
 const config_1 = require("@nestjs/config");
-const redis_service_1 = require("./redis.service");
 const rxjs_1 = require("rxjs");
+const INCLUDED_SPORTS = new Set([1, 3, 13, 17, 18, 12]);
+const SKIP_NAMES = ['esoccer', 'ebasketball', 'cs2', 'valorant', 'virtual', 'sports based games'];
+const APP_SPORT_ID = {
+    1: 1, 3: 3, 13: 13, 17: 4, 18: 18, 12: 12,
+};
+class MemCache {
+    store = new Map();
+    get(key) {
+        const e = this.store.get(key);
+        if (!e)
+            return null;
+        if (Date.now() > e.expiresAt) {
+            this.store.delete(key);
+            return null;
+        }
+        return e.value;
+    }
+    set(key, value, ttlMs) {
+        this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    }
+    prune() {
+        const now = Date.now();
+        for (const [k, v] of this.store) {
+            if (now > v.expiresAt)
+                this.store.delete(k);
+        }
+    }
+}
 let BetsApiService = BetsApiService_1 = class BetsApiService {
     httpService;
     configService;
-    redisService;
     logger = new common_1.Logger(BetsApiService_1.name);
-    constructor(httpService, configService, redisService) {
+    cache = new MemCache();
+    constructor(httpService, configService) {
         this.httpService = httpService;
         this.configService = configService;
-        this.redisService = redisService;
+        setInterval(() => this.cache.prune(), 60_000);
     }
-    async getLiveGames(sportId) {
-        const apiKey = this.configService.get('BETS_API_TOKEN');
-        const redisClient = this.redisService.getClient();
-        const endpoints = [
-            'https://api.betsapi.com/v1/bet365/inplay',
-            'https://api.b365api.com/v1/bet365/inplay',
-        ];
-        this.logger.log(`Fetching matches v9.0 (Hierarchical). Token: ${apiKey?.substring(0, 5)}...`);
-        const cacheKey = sportId ? `betsapi:live_games:${sportId}` : `betsapi:live_games:all`;
-        try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) {
-                this.logger.log(`Serving from cache: ${cacheKey}`);
-                return JSON.parse(cached);
-            }
-        }
-        catch (err) { }
-        let allParsedResults = [];
-        let debugInfo = [];
-        try {
-            const sportsToFetch = sportId ? [sportId] : [1, 13, 18, 12, 4, 16];
-            for (const endpoint of endpoints) {
-                const resultsForEndpoint = await Promise.all(sportsToFetch.map(async (sId) => {
-                    try {
-                        const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get(endpoint, { params: { token: apiKey, sport_id: sId } }));
-                        if (resp.data && resp.data.success === 1 && resp.data.results) {
-                            const parsed = this.parseBet365Inplay(resp.data.results);
-                            if (parsed.length > 0) {
-                                this.logger.log(`SUCCESS: Found ${parsed.length} real matches for sport ${sId} via ${endpoint}`);
-                                return parsed;
-                            }
-                        }
-                    }
-                    catch (e) {
-                        debugInfo.push(`Error ${endpoint} (sport ${sId}): ${e.message}`);
-                    }
-                    return [];
-                }));
-                allParsedResults = resultsForEndpoint.flat();
-                if (allParsedResults.length > 0)
-                    break;
-            }
-            const finalResponse = {
-                success: true,
-                results: allParsedResults,
-                timestamp: new Date().toISOString(),
-                count: allParsedResults.length,
-                is_simulated: false,
-                debug: debugInfo.length > 0 ? debugInfo : undefined
-            };
-            if (allParsedResults.length > 0) {
-                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 15).catch(() => { });
-            }
-            return finalResponse;
-        }
-        catch (err) {
-            this.logger.error(`Critical error in getLiveGames: ${err.message}`);
-            return { success: false, results: [], error: err.message };
-        }
-    }
-    async getGameDetails(eventId) {
-        const apiKey = this.configService.get('BETS_API_TOKEN');
-        const redisClient = this.redisService.getClient();
-        const cacheKey = `betsapi:game_details:${eventId}`;
-        try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached)
-                return JSON.parse(cached);
-        }
-        catch (err) { }
-        try {
-            const url = `https://api.betsapi.com/v1/bet365/event`;
-            const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get(url, { params: { token: apiKey, FI: eventId } }));
-            if (resp.data && resp.data.success === 1 && resp.data.results) {
-                const finalResponse = {
-                    success: true,
-                    results: resp.data.results,
-                    timestamp: new Date().toISOString()
-                };
-                await redisClient.set(cacheKey, JSON.stringify(finalResponse), 'EX', 10).catch(() => { });
-                return finalResponse;
-            }
-            return { success: false, error: 'Event not found or API error' };
-        }
-        catch (err) {
-            return { success: false, error: err.message };
-        }
-    }
-    parseBet365Inplay(results) {
-        if (!results || !Array.isArray(results))
-            return [];
-        const items = Array.isArray(results[0]) ? results[0] : results;
+    parseBet365Stream(items) {
         const events = [];
-        let currentCT = null;
-        let currentEV = null;
-        let currentMA = null;
+        let currentLeague = 'Unknown League';
         for (const item of items) {
+            if (!item?.type)
+                continue;
             if (item.type === 'CT') {
-                currentCT = item;
+                currentLeague = item.NA || 'Unknown League';
             }
             else if (item.type === 'EV') {
-                const leagueName = (currentCT?.NA || '').toLowerCase();
-                const eventName = (item.NA || '').toLowerCase();
-                const isVirtual = item.VI === '1' ||
-                    leagueName.includes('esoccer') ||
-                    leagueName.includes('ebasketball') ||
-                    leagueName.includes('volta') ||
-                    eventName.includes('esoccer') ||
-                    eventName.includes('ebasketball') ||
-                    (item.HP === '1' && (item.TU || '').includes('VIRTUAL'));
-                if (isVirtual) {
-                    currentEV = null;
+                const id = item.ID || item.FI || '';
+                const m = id.match(/C(\d+)A/);
+                if (!m)
                     continue;
-                }
-                currentEV = {
-                    id: item.ID,
-                    sport_id: item.CL || null,
-                    league: currentCT ? currentCT.NA : 'Unknown League',
-                    home: item.NA?.split(' v ')[0] || 'Team A',
-                    away: item.NA?.split(' v ')[1] || 'Team B',
-                    name: item.NA,
-                    ss: item.SS || '0-0',
-                    timer: item.TM || '0',
-                    time_status: item.TT || '0',
-                    is_virtual: false,
-                    odds: []
-                };
-                events.push(currentEV);
+                const betsApiSport = parseInt(m[1], 10);
+                if (!INCLUDED_SPORTS.has(betsApiSport))
+                    continue;
+                const leagueLower = currentLeague.toLowerCase();
+                if (SKIP_NAMES.some(s => leagueLower.includes(s)))
+                    continue;
+                const appSportId = APP_SPORT_ID[betsApiSport] ?? betsApiSport;
+                const nameParts = (item.NA || '').split(/\s+v(?:s)?\s+/i);
+                const home = nameParts[0]?.trim() || item.NA || 'Home';
+                const away = nameParts[1]?.trim() || 'Away';
+                events.push({
+                    id,
+                    sport_id: String(appSportId),
+                    league: currentLeague,
+                    home,
+                    away,
+                    name: item.NA || `${home} vs ${away}`,
+                    ss: item.SS || null,
+                    timer: item.TM || null,
+                    time_status: '1',
+                    odds: [],
+                });
             }
-            else if (item.type === 'MA' && currentEV) {
-                currentMA = item;
-            }
-            else if (item.type === 'PA' && currentEV && currentMA) {
-                if (currentMA.ID === '1777' || currentMA.NA?.toLowerCase().includes('result') || currentMA.NA?.toLowerCase().includes('winner')) {
-                    const label = item.OR === '0' ? '1' : (item.OR === '1' ? 'X' : '2');
-                    currentEV.odds.push({ name: label, value: item.OD });
+            else if (item.type === 'PA' && events.length > 0) {
+                const last = events[events.length - 1];
+                if (last.odds.length < 3 && item.OD) {
+                    const label = item.OR === '0' ? '1' : item.OR === '1' ? 'X' : '2';
+                    last.odds.push({ name: label, value: item.OD });
                 }
             }
         }
         return events;
+    }
+    async getLiveGames(sportId) {
+        const apiKey = this.configService.get('BETS_API_TOKEN');
+        const cacheKey = `live:${sportId ?? 'all'}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached) {
+            this.logger.debug(`Cache HIT: ${cacheKey}`);
+            return cached;
+        }
+        this.logger.log(`Fetching BetsAPI bet365/inplay (sportId=${sportId ?? 'ALL'})`);
+        try {
+            const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get('https://api.betsapi.com/v1/bet365/inplay', {
+                params: { token: apiKey },
+                timeout: 15000,
+            }));
+            if (resp.data?.success !== 1) {
+                this.logger.warn('BetsAPI returned success=0');
+                return { success: false, results: [], count: 0 };
+            }
+            const rawItems = Array.isArray(resp.data.results?.[0])
+                ? resp.data.results[0]
+                : resp.data.results || [];
+            let events = this.parseBet365Stream(rawItems);
+            if (sportId !== undefined) {
+                events = events.filter(ev => ev.sport_id === String(sportId));
+            }
+            const response = {
+                success: true,
+                results: events,
+                count: events.length,
+                timestamp: new Date().toISOString(),
+            };
+            this.cache.set(cacheKey, response, 10_000);
+            return response;
+        }
+        catch (e) {
+            this.logger.error(`getLiveGames failed: ${e.message}`);
+            return { success: false, results: [], count: 0, error: e.message };
+        }
+    }
+    async getGameDetails(eventId) {
+        const apiKey = this.configService.get('BETS_API_TOKEN');
+        const cacheKey = `details:${eventId}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached)
+            return cached;
+        try {
+            const resp = await (0, rxjs_1.firstValueFrom)(this.httpService.get('https://api.betsapi.com/v1/bet365/event', {
+                params: { token: apiKey, FI: eventId },
+                timeout: 8000,
+            }));
+            if (resp.data?.success === 1 && resp.data?.results) {
+                const response = {
+                    success: true,
+                    results: resp.data.results,
+                    timestamp: new Date().toISOString(),
+                };
+                this.cache.set(cacheKey, response, 8_000);
+                return response;
+            }
+            return { success: false, error: 'Event not found' };
+        }
+        catch (err) {
+            return { success: false, error: err.message };
+        }
     }
 };
 exports.BetsApiService = BetsApiService;
 exports.BetsApiService = BetsApiService = BetsApiService_1 = __decorate([
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [axios_1.HttpService,
-        config_1.ConfigService,
-        redis_service_1.RedisService])
+        config_1.ConfigService])
 ], BetsApiService);
 //# sourceMappingURL=bets-api.service.js.map

@@ -23,8 +23,8 @@ export declare class CurrencyService {
         createdAt: Date;
         updatedAt: Date;
         siteId: number;
-        isDefault: boolean;
         currencyId: number;
+        isDefault: boolean;
     }>;
     getSiteCurrencies(siteId: number): Promise<({
         currency: {
@@ -40,7 +40,7 @@ export declare class CurrencyService {
         createdAt: Date;
         updatedAt: Date;
         siteId: number;
-        isDefault: boolean;
         currencyId: number;
+        isDefault: boolean;
     })[]>;
 }

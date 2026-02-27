@@ -1,24 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
-import { RedisService } from './redis.service';
 
 @Injectable()
 export class SiteService {
     private readonly logger = new Logger(SiteService.name);
+    private readonly memCache = new Map<string, { data: any; expiresAt: number }>();
 
     constructor(
         private readonly prisma: PrismaService,
-        private readonly redisService: RedisService,
     ) { }
 
     async getConfigByDomain(domain: string): Promise<any> {
-        const redisClient = this.redisService.getClient();
         const cacheKey = `site:config:${domain}`;
 
-        try {
-            const cached = await redisClient.get(cacheKey);
-            if (cached) return JSON.parse(cached);
-        } catch (err) { }
+        const cached = this.memCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+            return cached.data;
+        }
 
         // Find site by domain
         let site = await this.prisma.site.findUnique({
@@ -54,7 +52,7 @@ export class SiteService {
         }
 
         if (site && site.isActive) {
-            await redisClient.set(cacheKey, JSON.stringify(site), 'EX', 60).catch(() => { });
+            this.memCache.set(cacheKey, { data: site, expiresAt: Date.now() + 60000 });
         }
 
         return site;

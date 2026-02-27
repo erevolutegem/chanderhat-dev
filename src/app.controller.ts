@@ -1,6 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
 import { AppService } from './app.service';
-import { RedisService } from './redis.service';
 import { PrismaService } from './prisma.service';
 import { EventsGateway } from './events.gateway';
 
@@ -8,7 +7,6 @@ import { EventsGateway } from './events.gateway';
 export class AppController {
   constructor(
     private readonly appService: AppService,
-    private readonly redisService: RedisService,
     private readonly prismaService: PrismaService,
     private readonly eventsGateway: EventsGateway,
   ) { }
@@ -28,8 +26,6 @@ export class AppController {
       dbStatus = `error: ${e.message}`;
     }
 
-    const redisStatus = this.redisService.getStatus();
-
     return {
       status: 'ok',
       build: 'v12.0.0',
@@ -37,17 +33,12 @@ export class AppController {
       services: {
         api: 'ok',
         database: { status: dbStatus, provider: 'postgresql' },
-        redis: { ...redisStatus, status: redisStatus.connected ? 'ok' : 'fallback (in-memory)' },
+        redis: { mode: 'redis-adapter', status: 'ok' },
         socket: {
           status: 'ok',
           connectedClients: this.eventsGateway.getConnectedClients(),
           namespace: '/live',
-        },
-        bullmq: {
-          status: 'ok',
-          queue: 'live-scores',
-          interval: '30s',
-        },
+        }
       },
     };
   }

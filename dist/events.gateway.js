@@ -8,25 +8,53 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var EventsGateway_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EventsGateway = void 0;
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
 const common_1 = require("@nestjs/common");
-let EventsGateway = class EventsGateway {
+let EventsGateway = EventsGateway_1 = class EventsGateway {
     server;
-    logger = new common_1.Logger('EventsGateway');
-    handleMessage(client, payload) {
-        return 'Hello from Chanderhat!';
+    logger = new common_1.Logger(EventsGateway_1.name);
+    connectedClients = 0;
+    afterInit(_server) {
+        this.logger.log('Socket.io Gateway initialized ✅');
     }
-    afterInit(server) {
-        this.logger.log('Init');
+    handleConnection(client) {
+        this.connectedClients++;
+        client.emit('connected', {
+            message: 'Connected to Chanderhat live feed',
+            timestamp: new Date().toISOString(),
+        });
+        this.logger.log(`Client connected: ${client.id} | Total: ${this.connectedClients}`);
     }
     handleDisconnect(client) {
-        this.logger.log(`Client disconnected: ${client.id}`);
+        this.connectedClients--;
+        this.logger.log(`Client disconnected: ${client.id} | Total: ${this.connectedClients}`);
     }
-    handleConnection(client, ...args) {
-        this.logger.log(`Client connected: ${client.id}`);
+    handleSubscribeSport(data, client) {
+        const room = `sport:${data.sportId}`;
+        client.join(room);
+        client.emit('subscribed', { room, sportId: data.sportId });
+    }
+    handleUnsubscribeSport(data, client) {
+        client.leave(`sport:${data.sportId}`);
+    }
+    pushLiveUpdate(sportId, matches) {
+        if (!this.server)
+            return;
+        const payload = { matches, timestamp: new Date().toISOString() };
+        if (sportId !== null) {
+            this.server.to(`sport:${sportId}`).emit('live:update', { sportId, ...payload });
+        }
+        this.server.emit('live:update:all', payload);
+    }
+    getConnectedClients() {
+        return this.connectedClients;
     }
 };
 exports.EventsGateway = EventsGateway;
@@ -35,16 +63,26 @@ __decorate([
     __metadata("design:type", socket_io_1.Server)
 ], EventsGateway.prototype, "server", void 0);
 __decorate([
-    (0, websockets_1.SubscribeMessage)('message'),
+    (0, websockets_1.SubscribeMessage)('subscribe:sport'),
+    __param(0, (0, websockets_1.MessageBody)()),
+    __param(1, (0, websockets_1.ConnectedSocket)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
-    __metadata("design:returntype", String)
-], EventsGateway.prototype, "handleMessage", null);
-exports.EventsGateway = EventsGateway = __decorate([
+    __metadata("design:paramtypes", [Object, socket_io_1.Socket]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleSubscribeSport", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('unsubscribe:sport'),
+    __param(0, (0, websockets_1.MessageBody)()),
+    __param(1, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, socket_io_1.Socket]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleUnsubscribeSport", null);
+exports.EventsGateway = EventsGateway = EventsGateway_1 = __decorate([
     (0, websockets_1.WebSocketGateway)({
-        cors: {
-            origin: '*',
-        },
+        cors: { origin: '*' },
+        namespace: '/live',
+        transports: ['websocket', 'polling'],
     })
 ], EventsGateway);
 //# sourceMappingURL=events.gateway.js.map

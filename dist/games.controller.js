@@ -20,20 +20,34 @@ let GamesController = class GamesController {
     constructor(betsApiService) {
         this.betsApiService = betsApiService;
     }
-    async getLiveGames(sportId) {
+    getHealth() {
+        return { status: 'ok', build: 'v12.0.0', timestamp: new Date().toISOString() };
+    }
+    async getLiveGames(sportId, tab) {
         const id = sportId ? parseInt(sportId, 10) : undefined;
         return this.betsApiService.getLiveGames(id);
     }
     async getGameDetails(id) {
         return this.betsApiService.getGameDetails(id);
     }
+    async getUpcomingGames(sportId) {
+        const id = sportId ? parseInt(sportId, 10) : undefined;
+        return this.betsApiService.getLiveGames(id);
+    }
 };
 exports.GamesController = GamesController;
 __decorate([
+    (0, common_1.Get)('health'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], GamesController.prototype, "getHealth", null);
+__decorate([
     (0, common_1.Get)('live'),
     __param(0, (0, common_1.Query)('sportId')),
+    __param(1, (0, common_1.Query)('tab')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], GamesController.prototype, "getLiveGames", null);
 __decorate([
@@ -43,6 +57,13 @@ __decorate([
     __metadata("design:paramtypes", [String]),
     __metadata("design:returntype", Promise)
 ], GamesController.prototype, "getGameDetails", null);
+__decorate([
+    (0, common_1.Get)('upcoming'),
+    __param(0, (0, common_1.Query)('sportId')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String]),
+    __metadata("design:returntype", Promise)
+], GamesController.prototype, "getUpcomingGames", null);
 exports.GamesController = GamesController = __decorate([
     (0, common_1.Controller)('games'),
     __metadata("design:paramtypes", [bets_api_service_1.BetsApiService])

@@ -17,8 +17,8 @@ export declare class OwnerService {
             createdAt: Date;
             updatedAt: Date;
             siteId: number;
-            isDefault: boolean;
             currencyId: number;
+            isDefault: boolean;
         })[];
     } & {
         id: number;
