@@ -14,27 +14,38 @@ import { OwnerService } from './owner.service';
 import { OwnerController } from './owner.controller';
 import { CurrencyService } from './currency.service';
 import { CurrencyController } from './owner.controller';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { JwtGuard } from './jwt.guard';
+import { BetsService } from './bets.service';
+import { BetsController } from './bets.controller';
 
-/**
- * AppModule — no Redis, no BullMQ.
- * Live score polling: setInterval (LiveScoresService)
- * Caching: in-memory Map with TTL (inside BetsApiService)
- */
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
     HttpModule,
   ],
-  controllers: [AppController, GamesController, SiteController, OwnerController, CurrencyController],
+  controllers: [
+    AppController,
+    GamesController,
+    SiteController,
+    OwnerController,
+    CurrencyController,
+    AuthController,
+    BetsController,
+  ],
   providers: [
     AppService,
     EventsGateway,
     BetsApiService,
-    LiveScoresService,   // setInterval-based poller (replaces BullMQ worker)
+    LiveScoresService,
     PrismaService,
     SiteService,
     OwnerService,
     CurrencyService,
+    AuthService,
+    JwtGuard,
+    BetsService,
   ],
 })
 export class AppModule { }

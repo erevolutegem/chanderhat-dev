@@ -7,6 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Admin / Owner Roles ─────────────────────────────────
 enum Role {
   ADMIN
   OWNER
@@ -29,7 +30,7 @@ model Site {
   name      String
   template  String   @default("playbaji")
   logoUrl   String?
-  config    Json?    // For theme-specific colors, social links, etc.
+  config    Json?
   isActive  Boolean  @default(true)
   ownerId   Int?
   owner     User?    @relation("OwnerSites", fields: [ownerId], references: [id])
@@ -40,9 +41,9 @@ model Site {
 
 model Currency {
   id        Int      @id @default(autoincrement())
-  code      String   @unique // e.g., BDT, INR, USD
-  symbol    String   // e.g., ৳, ₹, $
-  rate      Float    @default(1.0) // Rate relative to base currency
+  code      String   @unique
+  symbol    String
+  rate      Float    @default(1.0)
   sites     SiteCurrency[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -57,7 +58,6 @@ model SiteCurrency {
   currency   Currency @relation(fields: [currencyId], references: [id])
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
-
   @@unique([siteId, currencyId])
 }
 
@@ -67,4 +67,57 @@ model Setting {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ─── Betting System ───────────────────────────────────────
+
+model Player {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  balance      Decimal  @default(0) @db.Decimal(18, 2)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  bets         Bet[]
+  transactions Transaction[]
+}
+
+enum BetStatus {
+  PENDING
+  WON
+  LOST
+  VOIDED
+}
+
+model Bet {
+  id           Int       @id @default(autoincrement())
+  playerId     Int
+  matchId      String    // BetsAPI event ID
+  matchName    String
+  league       String    @default("")
+  market       String    // e.g. "Match Odds"
+  selection    String    // "1" | "X" | "2" etc.
+  oddsType     String    // "Back" | "Lay"
+  odds         Decimal   @db.Decimal(10, 4)
+  stake        Decimal   @db.Decimal(18, 2)
+  potentialWin Decimal   @db.Decimal(18, 2)
+  status       BetStatus @default(PENDING)
+  createdAt    DateTime  @default(now())
+  settledAt    DateTime?
+  player       Player    @relation(fields: [playerId], references: [id])
+}
+
+model Transaction {
+  id            Int      @id @default(autoincrement())
+  playerId      Int
+  type          String   // DEPOSIT | WITHDRAWAL | BET_PLACED | BET_WON | BET_REFUND
+  amount        Decimal  @db.Decimal(18, 2)
+  balanceBefore Decimal  @db.Decimal(18, 2)
+  balanceAfter  Decimal  @db.Decimal(18, 2)
+  ref           String?  // betId or payment reference
+  note          String?
+  createdAt     DateTime @default(now())
+  player        Player   @relation(fields: [playerId], references: [id])
 }
