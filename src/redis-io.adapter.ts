@@ -25,10 +25,12 @@ export class RedisIoAdapter extends IoAdapter {
         await Promise.all([
             new Promise<void>(resolve => pubClient.once('ready', () => {
                 this.logger.log('Redis Pub Client Ready');
+                pubClient.config('SET', 'stop-writes-on-bgsave-error', 'no').catch(e => this.logger.warn(`Failed to disable BGSAVE error: ${e.message}`));
                 resolve();
             })),
             new Promise<void>(resolve => subClient.once('ready', () => {
                 this.logger.log('Redis Sub Client Ready');
+                subClient.config('SET', 'stop-writes-on-bgsave-error', 'no').catch(e => this.logger.warn(`Failed to disable BGSAVE error on subClient: ${e.message}`));
                 resolve();
             }))
         ]);
