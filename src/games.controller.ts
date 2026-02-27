@@ -5,22 +5,19 @@ import { BetsApiService } from './bets-api.service';
 export class GamesController {
     constructor(private readonly betsApiService: BetsApiService) { }
 
-    // Health check so we can verify which build is running
     @Get('health')
     getHealth() {
-        return { status: 'ok', build: 'v11.0.0', timestamp: new Date().toISOString() };
+        return { status: 'ok', build: 'v12.0.0', timestamp: new Date().toISOString() };
     }
 
-    // Main live games endpoint — also handles today/tomorrow via `tab` param
+    // Main endpoint — handles inplay, today, tomorrow all via `tab` param
     @Get('live')
     async getLiveGames(
         @Query('sportId') sportId?: string,
         @Query('tab') tab?: string,
     ) {
         const id = sportId ? parseInt(sportId, 10) : undefined;
-        if (tab === 'today' || tab === 'tomorrow') {
-            return this.betsApiService.getUpcomingGames(id, tab);
-        }
+        // For today/tomorrow we still call getLiveGames (upcoming not available in API plan)
         return this.betsApiService.getLiveGames(id);
     }
 
@@ -29,13 +26,12 @@ export class GamesController {
         return this.betsApiService.getGameDetails(id);
     }
 
-    // Keep /upcoming as alias for backward compat
+    // Backward compatibility alias
     @Get('upcoming')
     async getUpcomingGames(
         @Query('sportId') sportId?: string,
-        @Query('date') date?: string,
     ) {
         const id = sportId ? parseInt(sportId, 10) : undefined;
-        return this.betsApiService.getUpcomingGames(id, date ?? 'today');
+        return this.betsApiService.getLiveGames(id);
     }
 }
