@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { BetsApiService } from './bets-api.service';
 import { EventsGateway } from './events.gateway';
 
-const POLL_MS = 5_000; // poll every 5 seconds
+const POLL_MS = 3_000; // poll every 3 seconds
 
 /**
  * LiveScoresService — replaces BullMQ entirely.
