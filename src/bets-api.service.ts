@@ -1,35 +1,51 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
-import { RedisService } from './redis.service';
 import { firstValueFrom } from 'rxjs';
 
 // BetsAPI sport IDs from event ID pattern C{n}A
-const SPORT_MAP: Record<number, string> = {
-    1: 'Soccer', 3: 'Cricket', 13: 'Tennis',
-    17: 'Ice Hockey', 18: 'Basketball', 12: 'American Football',
-};
 const INCLUDED_SPORTS = new Set([1, 3, 13, 17, 18, 12]);
 const SKIP_NAMES = ['esoccer', 'ebasketball', 'cs2', 'valorant', 'virtual', 'sports based games'];
-
-// Map BetsAPI sport IDs → our app sport IDs (Ice Hockey: BetsAPI=17, we use 4)
 const APP_SPORT_ID: Record<number, number> = {
     1: 1, 3: 3, 13: 13, 17: 4, 18: 18, 12: 12,
 };
-// Reverse: our sport IDs → BetsAPI sport IDs for filtering
-const TO_BETS_SPORT_ID: Record<number, number> = {
-    1: 1, 3: 3, 13: 13, 4: 17, 18: 18, 12: 12,
-};
+
+/* ─── Simple in-memory cache (replaces Redis/ioredis) ──────────── */
+interface CacheEntry { value: any; expiresAt: number; }
+
+class MemCache {
+    private store = new Map<string, CacheEntry>();
+
+    get(key: string): any | null {
+        const e = this.store.get(key);
+        if (!e) return null;
+        if (Date.now() > e.expiresAt) { this.store.delete(key); return null; }
+        return e.value;
+    }
+
+    set(key: string, value: any, ttlMs: number) {
+        this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
+    }
+
+    /** Prune expired entries (call periodically) */
+    prune() {
+        const now = Date.now();
+        for (const [k, v] of this.store) { if (now > v.expiresAt) this.store.delete(k); }
+    }
+}
 
 @Injectable()
 export class BetsApiService {
     private readonly logger = new Logger(BetsApiService.name);
+    private readonly cache = new MemCache();
 
     constructor(
         private readonly httpService: HttpService,
         private readonly configService: ConfigService,
-        private readonly redisService: RedisService,
-    ) { }
+    ) {
+        // Prune expired cache entries every 60 seconds
+        setInterval(() => this.cache.prune(), 60_000);
+    }
 
     private parseBet365Stream(items: any[]): any[] {
         const events: any[] = [];
@@ -48,8 +64,8 @@ export class BetsApiService {
                 const betsApiSport = parseInt(m[1], 10);
                 if (!INCLUDED_SPORTS.has(betsApiSport)) continue;
 
-                const league = currentLeague.toLowerCase();
-                if (SKIP_NAMES.some(s => league.includes(s))) continue;
+                const leagueLower = currentLeague.toLowerCase();
+                if (SKIP_NAMES.some(s => leagueLower.includes(s))) continue;
 
                 const appSportId = APP_SPORT_ID[betsApiSport] ?? betsApiSport;
                 const nameParts = (item.NA || '').split(/\s+v(?:s)?\s+/i);
@@ -81,16 +97,16 @@ export class BetsApiService {
 
     async getLiveGames(sportId?: number): Promise<any> {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
-        const appSportId = sportId;
-        const cacheKey = `betsapi:live:v3:${appSportId ?? 'all'}`;
+        const cacheKey = `live:${sportId ?? 'all'}`;
 
-        const cached = await this.redisService.get(cacheKey);
+        // Try cache first (TTL 10 seconds — fast refresh)
+        const cached = this.cache.get(cacheKey);
         if (cached) {
-            this.logger.log(`Cache HIT: ${cacheKey}`);
-            return JSON.parse(cached);
+            this.logger.debug(`Cache HIT: ${cacheKey}`);
+            return cached;
         }
 
-        this.logger.log(`Fetching bet365/inplay. sportId=${appSportId ?? 'ALL'}`);
+        this.logger.log(`Fetching BetsAPI bet365/inplay (sportId=${sportId ?? 'ALL'})`);
 
         try {
             const resp = await firstValueFrom(
@@ -111,8 +127,8 @@ export class BetsApiService {
 
             let events = this.parseBet365Stream(rawItems);
 
-            if (appSportId !== undefined) {
-                events = events.filter(ev => ev.sport_id === String(appSportId));
+            if (sportId !== undefined) {
+                events = events.filter(ev => ev.sport_id === String(sportId));
             }
 
             const response = {
@@ -122,7 +138,8 @@ export class BetsApiService {
                 timestamp: new Date().toISOString(),
             };
 
-            await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', 25);
+            // Cache for 10 seconds
+            this.cache.set(cacheKey, response, 10_000);
             return response;
         } catch (e: any) {
             this.logger.error(`getLiveGames failed: ${e.message}`);
@@ -132,10 +149,10 @@ export class BetsApiService {
 
     async getGameDetails(eventId: string): Promise<any> {
         const apiKey = this.configService.get<string>('BETS_API_TOKEN');
-        const cacheKey = `betsapi:details:${eventId}`;
+        const cacheKey = `details:${eventId}`;
 
-        const cached = await this.redisService.get(cacheKey);
-        if (cached) return JSON.parse(cached);
+        const cached = this.cache.get(cacheKey);
+        if (cached) return cached;
 
         try {
             const resp = await firstValueFrom(
@@ -146,8 +163,13 @@ export class BetsApiService {
             );
 
             if (resp.data?.success === 1 && resp.data?.results) {
-                const response = { success: true, results: resp.data.results, timestamp: new Date().toISOString() };
-                await this.redisService.set(cacheKey, JSON.stringify(response), 'EX', 10);
+                const response = {
+                    success: true,
+                    results: resp.data.results,
+                    timestamp: new Date().toISOString(),
+                };
+                // Cache event details for 8 seconds
+                this.cache.set(cacheKey, response, 8_000);
                 return response;
             }
             return { success: false, error: 'Event not found' };
